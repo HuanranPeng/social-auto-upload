@@ -193,6 +193,7 @@ class XiaohongshuUploaderTests(unittest.TestCase):
                 publish_date=0,
                 account_file=str(cookie_path),
                 thumbnail_path=str(thumbnail_path),
+                dry_run=True,
             )
 
             with patch(

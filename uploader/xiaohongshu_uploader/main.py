@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -534,6 +535,8 @@ class XiaoHongShuVideo(XiaoHongShuBaseUploader):
         publish_strategy: str = XIAOHONGSHU_PUBLISH_STRATEGY_IMMEDIATE,
         debug: bool = DEBUG_MODE,
         headless: bool = LOCAL_CHROME_HEADLESS,
+        dry_run: bool = False,
+        confirm_publish: bool = False,
     ):
         super().__init__(
             publish_date=publish_date,
@@ -547,9 +550,13 @@ class XiaoHongShuVideo(XiaoHongShuBaseUploader):
         self.tags = tags or []
         self.thumbnail_path = thumbnail_path
         self.desc = desc or ""
+        self.dry_run = dry_run
+        self.confirm_publish = confirm_publish
 
     async def validate_upload_args(self):
         await self.validate_base_args()
+        if not self.dry_run and not self.confirm_publish:
+            raise ValueError("必须显式选择 dry_run 或 confirm_publish，拒绝隐式发布")
         if not self.title or not str(self.title).strip():
             raise ValueError("视频模式下，title 是必须的")
 
@@ -561,11 +568,33 @@ class XiaoHongShuVideo(XiaoHongShuBaseUploader):
         xiaohongshu_logger.warning(_msg("😵", "视频上传摔了一跤，小人马上重新上传"))
         await page.locator('div.progress-div [class^="upload-btn-input"]').set_input_files(self.file_path)
 
+    async def log_thumbnail_diagnostics(self, page: Page) -> None:
+        if not self.debug:
+            return
+        details = await page.evaluate(
+            """() => Array.from(document.querySelectorAll('button, [role="button"], input[type="file"], [class*="cover"], [class*="Cover"]'))
+              .filter(el => {
+                const text = (el.innerText || el.textContent || '').trim();
+                const cls = typeof el.className === 'string' ? el.className : '';
+                return /封面|cover/i.test(text + ' ' + cls) || el.matches('input[type="file"]');
+              })
+              .slice(0, 40)
+              .map(el => ({
+                tag: el.tagName,
+                text: (el.innerText || el.textContent || '').trim().slice(0, 100),
+                className: typeof el.className === 'string' ? el.className.slice(0, 180) : '',
+                accept: el.getAttribute('accept'),
+                visible: Boolean(el.offsetWidth || el.offsetHeight || el.getClientRects().length),
+              }))"""
+        )
+        xiaohongshu_logger.debug(_msg("🔎", f"封面控件诊断: {details}"))
+
     async def set_thumbnail(self, page: Page, thumbnail_path: str):
         if not thumbnail_path:
             return
 
         xiaohongshu_logger.info(_msg("🖼️", "小人准备设置封面"))
+        await self.log_thumbnail_diagnostics(page)
 
         # 自定义封面是显式请求时的必需步骤。发布页在视频仍上传/处理时会
         # 先渲染一个隐藏的封面控件，因此要等待真正可见的入口，不能退回首帧。
@@ -582,6 +611,7 @@ class XiaoHongShuVideo(XiaoHongShuBaseUploader):
             cover_candidates = [
                 page.locator("div.upload-cover:visible").first,
                 page.get_by_text("编辑封面", exact=True).filter(visible=True).first,
+                page.locator("div.cover-plugin-preview:visible").first,
                 page.locator("div.cover-plugin-preview div.default.pointer:visible").first,
             ]
             upload_cover = None
@@ -663,6 +693,15 @@ class XiaoHongShuVideo(XiaoHongShuBaseUploader):
                             if '上传成功' in text_content or '分辨率' in text_content:
                                 upload_success = True
                                 break
+
+                    if not upload_success:
+                        progress_card = page.locator("div.cover-container").first
+                        progress_text = (await progress_card.inner_text()).strip() if await progress_card.count() else ""
+                        title_container = page.locator('input[placeholder*="填写标题"]')
+                        editor_ready = await title_container.count() > 0 and await title_container.is_visible()
+                        upload_in_progress = "上传中" in progress_text or bool(re.search(r"\b\d{1,3}%", progress_text))
+                        if editor_ready and not upload_in_progress and all_text.strip():
+                            upload_success = True
                     
                     if upload_success:
                         xiaohongshu_logger.success(_msg("🥳", "视频已经传完啦"))
@@ -676,8 +715,15 @@ class XiaoHongShuVideo(XiaoHongShuBaseUploader):
                     # 尝试检查标题输入框是否已经出现，如果是，说明已经进入编辑状态
                     title_container = page.locator('input[placeholder*="填写标题"]')
                     if await title_container.count() > 0 and await title_container.is_visible():
-                        xiaohongshu_logger.success(_msg("🥳", "虽然没看到预览区，但标题框出来了，小人继续"))
-                        break
+                        progress_text = ""
+                        progress_card = page.locator("div.cover-container").first
+                        if await progress_card.count():
+                            progress_text = (await progress_card.inner_text()).strip()
+                        if "上传中" in progress_text or re.search(r"\b\d{1,3}%", progress_text):
+                            xiaohongshu_logger.debug(_msg("⏳", f"标题框已出现，但视频仍在上传: {progress_text}"))
+                        else:
+                            xiaohongshu_logger.success(_msg("🥳", "标题框已出现且上传进度已结束，小人继续"))
+                            break
                     xiaohongshu_logger.debug(_msg("🧍", "还没拿到预览区域，小人继续等一会"))
             except Exception as e:
                 xiaohongshu_logger.debug(_msg("😵", f"上传状态还没稳定下来，小人继续观察: {e}"))
@@ -694,6 +740,10 @@ class XiaoHongShuVideo(XiaoHongShuBaseUploader):
 
         if self.publish_strategy == XIAOHONGSHU_PUBLISH_STRATEGY_SCHEDULED and self.publish_date != 0:
             await self.set_schedule_time_xiaohongshu(page, self.publish_date)
+
+        if self.dry_run:
+            xiaohongshu_logger.success(_msg("🧪", "试运行检查完成，未点击发布"))
+            return
 
         while True:
             try:

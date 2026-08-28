@@ -77,7 +77,10 @@ async def get_tiktok_cookie(account_file):
 
 
 class TiktokVideo(object):
-    def __init__(self, title, file_path, tags, publish_date, account_file, thumbnail_path=None):
+    def __init__(
+        self, title, file_path, tags, publish_date, account_file,
+        thumbnail_path=None, dry_run=False, confirm_publish=False,
+    ):
         self.title = title
         self.file_path = file_path
         self.tags = tags
@@ -87,6 +90,8 @@ class TiktokVideo(object):
         self.local_executable_path = LOCAL_CHROME_PATH
         self.headless = LOCAL_CHROME_HEADLESS
         self.locator_base = None
+        self.dry_run = dry_run
+        self.confirm_publish = confirm_publish
 
     async def set_schedule_time(self, page, publish_date):
         schedule_input_element = self.locator_base.get_by_label('Schedule')
@@ -153,6 +158,8 @@ class TiktokVideo(object):
         await file_chooser.set_files(self.file_path)
 
     async def upload(self, playwright: Playwright) -> None:
+        if not self.dry_run and not self.confirm_publish:
+            raise ValueError("Choose dry_run=True or confirm_publish=True; implicit TikTok publishing is disabled")
         launch_options = {"headless": self.headless}
         if self.local_executable_path:
             launch_options["executable_path"] = self.local_executable_path
@@ -194,6 +201,13 @@ class TiktokVideo(object):
 
         if self.publish_date != 0:
             await self.set_schedule_time(page, self.publish_date)
+
+        if self.dry_run:
+            tiktok_logger.success("  [-] dry-run complete; Post was not clicked")
+            await context.storage_state(path=f"{self.account_file}")
+            await context.close()
+            await browser.close()
+            return
 
         await self.click_publish(page)
         tiktok_logger.success(f"video_id: {await self.get_last_video_id(page)}")
@@ -245,10 +259,31 @@ class TiktokVideo(object):
             await page.keyboard.press("End")
 
     async def upload_thumbnails(self, page):
-        await self.locator_base.locator(".cover-container").click()
-        await self.locator_base.locator(".cover-edit-container >> text=Upload cover").click()
+        cover_trigger = self.locator_base.locator(".cover-container").first
+        if not await cover_trigger.count():
+            cover_trigger = self.locator_base.get_by_text(re.compile(r"Edit cover|Cover"), exact=False).first
+        await cover_trigger.click()
+        await page.wait_for_timeout(1000)
+
+        controls = await page.evaluate(
+            """() => Array.from(document.querySelectorAll('button, [role="button"], input[type="file"], [class*="cover"], [class*="Cover"]'))
+              .filter(el => /cover|upload/i.test((el.innerText || el.textContent || '') + ' ' + (typeof el.className === 'string' ? el.className : '')) || el.matches('input[type="file"]'))
+              .slice(0, 50)
+              .map(el => ({tag: el.tagName, text: (el.innerText || el.textContent || '').trim().slice(0, 100), className: typeof el.className === 'string' ? el.className.slice(0, 180) : '', accept: el.getAttribute('accept'), visible: Boolean(el.offsetWidth || el.offsetHeight || el.getClientRects().length)}))"""
+        )
+        tiktok_logger.debug(f"cover controls: {controls}")
+
+        upload_tab = self.locator_base.get_by_text("Upload cover", exact=True).first
+        if not await upload_tab.count():
+            upload_tab = self.locator_base.get_by_role("button", name=re.compile(r"Upload cover", re.I)).first
+        if not await upload_tab.count():
+            raise RuntimeError("TikTok Studio does not expose a visible custom-cover upload control")
+        await upload_tab.click()
         async with page.expect_file_chooser() as fc_info:
-            await self.locator_base.locator(".upload-image-upload-area").click()
+            upload_area = self.locator_base.locator(".upload-image-upload-area").first
+            if not await upload_area.count():
+                upload_area = self.locator_base.get_by_text(re.compile(r"Upload.*image|Select.*image", re.I)).first
+            await upload_area.click()
             file_chooser = await fc_info.value
             await file_chooser.set_files(self.thumbnail_path)
         await self.locator_base.locator('div.cover-edit-panel:not(.hide-panel)').get_by_role(

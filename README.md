@@ -184,12 +184,14 @@ sau kuaishou upload-note --account <account_name> --images videos/1.png videos/2
 
 sau xiaohongshu login --account <account_name>
 sau xiaohongshu check --account <account_name>
-sau xiaohongshu upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介"
+sau xiaohongshu upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --dry-run
 sau xiaohongshu upload-note --account <account_name> --images videos/1.png videos/2.png videos/3.png --title "图文标题" --note "图文正文"
 
 sau bilibili login --account <account_name>
 sau bilibili check --account <account_name>
 sau bilibili upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --tid 249
+
+sau tiktok upload-video --account-file cookies/tk_uploader/account.json --file videos/demo.mp4 --title "Example caption" --tags ChineseSong,MandarinSong,VocalCover --thumbnail cover.png --dry-run
 
 sau tencent login --account <account_name>
 sau tencent check --account <account_name>
@@ -239,6 +241,8 @@ sau tags --platform douyin \
 补充说明：
 
 - `creator` 之类的名字只是示例值，真正含义是 `account_name`
+- 小红书视频必须显式选择 `--dry-run`（上传并检查但不发布）或 `--confirm-publish`（允许点击发布），防止误发
+- TikTok uploader 同样要求调用方显式传入 `dry_run=True` 或 `confirm_publish=True`
 - 一个 `account_name` 对应一个账号文件，可以准备多个账号，也可以按账号名并发执行任务
 - 抖音视频发布若触发短信二次验证，程序会优先读取项目根目录下的 `verify_code.txt`；如果你是在本地交互式终端手动运行 CLI，也可以直接按终端提示输入验证码
 - 浏览器平台统一约定：

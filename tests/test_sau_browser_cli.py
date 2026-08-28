@@ -170,10 +170,31 @@ class BrowserCliParserTests(unittest.TestCase):
                     str(video_path),
                     "--title",
                     "视频标题",
+                    "--dry-run",
                 ]
             )
 
         self.assertTrue(args.headless)
+
+    def test_xiaohongshu_upload_video_accepts_dry_run(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            video_path = Path(tmp_dir) / "demo.mp4"
+            video_path.write_bytes(b"video")
+            args = sau_cli.build_parser().parse_args([
+                "xiaohongshu", "upload-video", "--account", "creator",
+                "--file", str(video_path), "--title", "视频标题", "--dry-run",
+            ])
+        self.assertTrue(args.dry_run)
+
+    def test_xiaohongshu_upload_video_requires_explicit_submit_mode(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            video_path = Path(tmp_dir) / "demo.mp4"
+            video_path.write_bytes(b"video")
+            with self.assertRaises(SystemExit):
+                sau_cli.build_parser().parse_args([
+                    "xiaohongshu", "upload-video", "--account", "creator",
+                    "--file", str(video_path), "--title", "视频标题",
+                ])
 
     def test_xiaohongshu_upload_note_accepts_headed(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

@@ -44,6 +44,7 @@ from uploader.tencent_uploader.main import (
     cookie_auth as tencent_cookie_auth,
     tencent_setup,
 )
+from uploader.tk_uploader.main_chrome import TiktokVideo, cookie_auth as tiktok_cookie_auth
 from uploader.weibo_uploader.main import (
     WeiBoVideo,
     weibo_setup,
@@ -145,6 +146,8 @@ class XiaohongshuVideoUploadRequest:
     publish_strategy: str = XIAOHONGSHU_PUBLISH_STRATEGY_IMMEDIATE
     debug: bool = True
     headless: bool = True
+    dry_run: bool = False
+    confirm_publish: bool = False
 
 
 @dataclass(slots=True)
@@ -170,6 +173,18 @@ class BilibiliVideoUploadRequest:
     tags: list[str]
     publish_date: datetime | int
     thumbnail_file: Path | None = None
+
+
+@dataclass(slots=True)
+class TiktokVideoUploadRequest:
+    account_file: Path
+    video_file: Path
+    title: str
+    tags: list[str]
+    publish_date: datetime | int
+    thumbnail_file: Path | None = None
+    dry_run: bool = False
+    confirm_publish: bool = False
 
 
 @dataclass(slots=True)
@@ -531,6 +546,8 @@ async def upload_xiaohongshu_video(request: XiaohongshuVideoUploadRequest) -> Pa
         publish_strategy=request.publish_strategy,
         debug=request.debug,
         headless=request.headless,
+        dry_run=request.dry_run,
+        confirm_publish=request.confirm_publish,
     )
     await app.main()
     return account_file
@@ -589,6 +606,25 @@ async def upload_bilibili_video(request: BilibiliVideoUploadRequest) -> Path:
     result = run_biliup_command(arguments)
     if result.returncode != 0:
         raise RuntimeError((result.stderr or result.stdout or "").strip() or "Bilibili upload failed")
+    return account_file
+
+
+async def upload_tiktok_video(request: TiktokVideoUploadRequest) -> Path:
+    account_file = request.account_file.resolve()
+    if not await tiktok_cookie_auth(str(account_file)):
+        raise RuntimeError(f"TikTok cookie is missing or expired: {account_file}")
+
+    app = TiktokVideo(
+        title=request.title,
+        file_path=str(request.video_file),
+        tags=request.tags,
+        publish_date=request.publish_date,
+        account_file=str(account_file),
+        thumbnail_path=str(request.thumbnail_file) if request.thumbnail_file else None,
+        dry_run=request.dry_run,
+        confirm_publish=request.confirm_publish,
+    )
+    await app.main()
     return account_file
 
 
@@ -891,6 +927,13 @@ def build_parser() -> argparse.ArgumentParser:
     xiaohongshu_upload_video_parser.add_argument("--tags", default="", help="Comma-separated tags, such as tag1,tag2")
     xiaohongshu_upload_video_parser.add_argument("--schedule", type=schedule_value, help=f"Schedule time in {schedule_help}")
     xiaohongshu_upload_video_parser.add_argument("--thumbnail", type=existing_file_path, help="Optional thumbnail path")
+    xhs_submit_mode = xiaohongshu_upload_video_parser.add_mutually_exclusive_group(required=True)
+    xhs_submit_mode.add_argument(
+        "--dry-run", action="store_true", help="Upload and verify the post without clicking Publish"
+    )
+    xhs_submit_mode.add_argument(
+        "--confirm-publish", action="store_true", help="Explicitly allow the final Publish click"
+    )
     add_runtime_flags(xiaohongshu_upload_video_parser)
 
     xiaohongshu_upload_note_parser = xiaohongshu_actions.add_parser("upload-note", help="Upload one note to Xiaohongshu")
@@ -918,6 +961,19 @@ def build_parser() -> argparse.ArgumentParser:
     bilibili_upload_video_parser.add_argument("--tags", default="", help="Comma-separated tags, such as tag1,tag2")
     bilibili_upload_video_parser.add_argument("--thumbnail", type=existing_file_path, help="Optional Bilibili cover image path")
     bilibili_upload_video_parser.add_argument("--schedule", type=schedule_value, help=f"Schedule time in {schedule_help}")
+
+    tiktok_parser = platform_parsers.add_parser("tiktok", help="TikTok operations")
+    tiktok_actions = tiktok_parser.add_subparsers(dest="action", required=True)
+    tiktok_upload_video_parser = tiktok_actions.add_parser("upload-video", help="Upload one video to TikTok")
+    tiktok_upload_video_parser.add_argument("--account-file", required=True, type=existing_file_path, help="TikTok storage-state JSON path")
+    tiktok_upload_video_parser.add_argument("--file", required=True, type=existing_file_path, help="Video file path")
+    tiktok_upload_video_parser.add_argument("--title", required=True, help="English caption/title")
+    tiktok_upload_video_parser.add_argument("--tags", default="", help="Comma-separated tags")
+    tiktok_upload_video_parser.add_argument("--schedule", type=schedule_value, help=f"Schedule time in {schedule_help}")
+    tiktok_upload_video_parser.add_argument("--thumbnail", type=existing_file_path, help="Optional custom thumbnail path")
+    tiktok_submit_mode = tiktok_upload_video_parser.add_mutually_exclusive_group(required=True)
+    tiktok_submit_mode.add_argument("--dry-run", action="store_true", help="Upload and verify without clicking Post")
+    tiktok_submit_mode.add_argument("--confirm-publish", action="store_true", help="Explicitly allow the final Post click")
 
     tencent_parser = platform_parsers.add_parser("tencent", help="Tencent/WeChat Channels operations")
     tencent_actions = tencent_parser.add_subparsers(dest="action", required=True)
@@ -1209,6 +1265,8 @@ async def dispatch(args: argparse.Namespace) -> int:
                 publish_strategy=publish_strategy,
                 debug=args.debug,
                 headless=args.headless,
+                dry_run=getattr(args, "dry_run", False),
+                confirm_publish=getattr(args, "confirm_publish", False),
             )
             await upload_xiaohongshu_video(request)
             print(f"Xiaohongshu video upload submitted: {request.video_file}")
@@ -1265,6 +1323,25 @@ async def dispatch(args: argparse.Namespace) -> int:
             return 0
 
         raise RuntimeError(f"Unsupported Bilibili action: {args.action}")
+
+    if args.platform == "tiktok":
+        if args.action == "upload-video":
+            request = TiktokVideoUploadRequest(
+                account_file=args.account_file,
+                video_file=args.file,
+                title=args.title,
+                tags=parse_tags(args.tags),
+                publish_date=args.schedule or 0,
+                thumbnail_file=args.thumbnail,
+                dry_run=args.dry_run,
+                confirm_publish=args.confirm_publish,
+            )
+            await upload_tiktok_video(request)
+            mode = "prepared without publishing" if request.dry_run else "submitted"
+            print(f"TikTok video {mode}: {request.video_file}")
+            return 0
+
+        raise RuntimeError(f"Unsupported TikTok action: {args.action}")
 
     if args.platform == "tencent":
         if args.action == "login":
