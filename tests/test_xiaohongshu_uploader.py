@@ -90,11 +90,11 @@ class RecordingPage:
 
 
 class XiaohongshuUploaderTests(unittest.TestCase):
-    def test_creator_urls_keep_xiaohongshu_domain_by_default(self):
+    def test_creator_urls_use_current_rednote_domain_by_default(self):
         with patch.dict(os.environ, {"SAU_XHS_CREATOR_BASE_URL": ""}):
             self.assertEqual(
                 xhs_main._build_xhs_creator_url("/login"),
-                "https://creator.xiaohongshu.com/login",
+                "https://creator.rednote.com/login",
             )
 
     def test_creator_urls_use_configured_rednote_domain(self):
@@ -243,7 +243,7 @@ class XiaohongshuUploaderTests(unittest.TestCase):
         self.assertIn(("type", "#话题1", 30), page.keyboard.actions)
         self.assertEqual(
             page.locators['#creator-editor-topic-container .item'].actions,
-            [("wait_for", {"state": "visible", "timeout": 2000}), ("click",)],
+            [("wait_for", {"state": "visible", "timeout": 4000}), ("click",)],
         )
 
     def test_video_fill_meta_can_fill_first_tag_without_desc(self):

@@ -21,8 +21,14 @@ async def cookie_auth(account_file):
         # 创建一个新的页面
         page = await context.new_page()
         # 访问指定的 URL
-        await page.goto("https://www.tiktok.com/tiktokstudio/upload?lang=en")
-        await page.wait_for_load_state('networkidle')
+        await page.goto(
+            "https://www.tiktok.com/tiktokstudio/upload?lang=en",
+            wait_until="domcontentloaded",
+        )
+        await page.wait_for_timeout(5000)
+        if "/login" in page.url:
+            tiktok_logger.error("[+] cookie expired")
+            return False
         try:
             # 选择所有的 select 元素
             select_elements = await page.query_selector_all('select')
@@ -147,7 +153,10 @@ class TiktokVideo(object):
         await file_chooser.set_files(self.file_path)
 
     async def upload(self, playwright: Playwright) -> None:
-        browser = await playwright.chromium.launch(headless=self.headless, executable_path=self.local_executable_path)
+        launch_options = {"headless": self.headless}
+        if self.local_executable_path:
+            launch_options["executable_path"] = self.local_executable_path
+        browser = await playwright.chromium.launch(**launch_options)
         context = await browser.new_context(storage_state=f"{self.account_file}")
         # context = await set_init_script(context)
         page = await context.new_page()
@@ -198,8 +207,14 @@ class TiktokVideo(object):
 
     async def add_title_tags(self, page):
 
+        # TikTok Studio may show a first-run joyride overlay that intercepts
+        # every pointer event even though the editor is already visible.
+        await page.evaluate(
+            "() => document.querySelectorAll('#react-joyride-portal, [data-test-id=\"overlay\"]').forEach(e => e.remove())"
+        )
+
         editor_locator = self.locator_base.locator('div.public-DraftEditor-content')
-        await editor_locator.click()
+        await editor_locator.click(force=True)
 
         await page.keyboard.press("End")
 

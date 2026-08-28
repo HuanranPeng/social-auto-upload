@@ -216,6 +216,19 @@ sau youtube check --account <account_name>
 sau youtube upload-video --account <account_name> --file videos/demo.mp4 --title "示例标题" --desc "示例简介" --tags tag1,tag2 --playlist "我的系列" --visibility public
 ```
 
+发布前可按平台生成一组分层标签。候选词依次分为精准词、内容分类、人设/场景和泛流量词；工具会去重，并按平台推荐组合选取。该命令不声称提供实时热榜，泛流量候选词仍应结合平台当日趋势核验：
+
+```bash
+sau tags --platform douyin \
+  --exact "梁博,曾经是情侣" \
+  --category "翻唱歌曲,男声翻唱" \
+  --identity "硅谷生活" \
+  --broad "热门音乐"
+# 输出：梁博,曾经是情侣,翻唱歌曲,硅谷生活,热门音乐
+```
+
+将输出直接传给对应上传命令的 `--tags` 即可。当前内置策略覆盖 `douyin`、`xiaohongshu`、`bilibili`、`tiktok` 和 `instagram`，也可用 `--limit` 调整数量。
+
 > YouTube 说明：登录是交互式的（Google 账号，浏览器里完成，无二维码）。这里走浏览器自动化而不是官方 API，
 > 是因为**未通过 Google 合规审核的 API 项目上传的视频会被强制锁为私享、无法改公开**，对个人/单频道不实用；
 > 浏览器自动化没有此限制，可直接发布公开视频，也与本项目其它平台的 cookie 方案一致。

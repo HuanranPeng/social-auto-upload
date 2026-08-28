@@ -21,7 +21,7 @@ from utils.login_qrcode import remove_qrcode_file
 from utils.login_qrcode import save_data_url_image
 from utils.log import xiaohongshu_logger
 
-XHS_DEFAULT_CREATOR_BASE_URL = "https://creator.xiaohongshu.com"
+XHS_DEFAULT_CREATOR_BASE_URL = "https://creator.rednote.com"
 XHS_CREATOR_BASE_URL_ENV = "SAU_XHS_CREATOR_BASE_URL"
 XHS_PUBLISH_SUCCESS_URL_PATTERN = "**/publish/success?**"
 XHS_LOGIN_BOX_SELECTOR = "div[class*='login-box']"
@@ -567,7 +567,8 @@ class XiaoHongShuVideo(XiaoHongShuBaseUploader):
 
         xiaohongshu_logger.info(_msg("🖼️", "小人准备设置封面"))
 
-        # 封面设置为增强步骤：失败时记 warning 跳过、继续发布（用视频首帧兜底）。
+        # 自定义封面是显式请求时的必需步骤。发布页在视频仍上传/处理时会
+        # 先渲染一个隐藏的封面控件，因此要等待真正可见的入口，不能退回首帧。
         try:
             # 发布页封面区域内嵌，点击 div.upload-cover 打开封面弹窗（d-modal）。
             cover_section = page.locator("text=设置封面").first
@@ -577,11 +578,24 @@ class XiaoHongShuVideo(XiaoHongShuBaseUploader):
                 pass
             await page.wait_for_timeout(2000)
 
-            # 1. 点击 div.upload-cover 打开封面弹窗
-            upload_cover = page.locator("div.upload-cover").first
-            if not await upload_cover.count():
-                upload_cover = page.locator("div.cover-plugin-preview div.default.pointer").first
-            await upload_cover.click(force=True)
+            # 1. 等视频处理完成，并点击当前页面真正可见的封面入口。
+            cover_candidates = [
+                page.locator("div.upload-cover:visible").first,
+                page.get_by_text("编辑封面", exact=True).filter(visible=True).first,
+                page.locator("div.cover-plugin-preview div.default.pointer:visible").first,
+            ]
+            upload_cover = None
+            for _ in range(150):
+                for candidate in cover_candidates:
+                    if await candidate.count() and await candidate.is_visible():
+                        upload_cover = candidate
+                        break
+                if upload_cover is not None:
+                    break
+                await page.wait_for_timeout(2000)
+            if upload_cover is None:
+                raise RuntimeError("等待视频处理完成后仍未找到可见的封面入口")
+            await upload_cover.click()
             await page.wait_for_timeout(3000)
 
             # 2. 切换到「上传封面」tab（默认在「截取封面」）
@@ -613,12 +627,13 @@ class XiaoHongShuVideo(XiaoHongShuBaseUploader):
                 pass
             xiaohongshu_logger.success(_msg("🥳", "封面已经设置完成"))
         except Exception as exc:
-            xiaohongshu_logger.warning(_msg("🖼️", f"封面设置失败，跳过该步骤继续发布（用视频首帧）：{exc}"))
+            xiaohongshu_logger.error(_msg("🖼️", f"封面设置失败，停止发布以避免使用错误封面：{exc}"))
             try:
                 await page.keyboard.press("Escape")
                 await page.wait_for_timeout(500)
             except Exception:
                 pass
+            raise
 
     async def upload_video_content(self, page: Page) -> None:
         xiaohongshu_logger.info(_msg("🏃", f"小人开始搬运视频: {self.title}.mp4"))

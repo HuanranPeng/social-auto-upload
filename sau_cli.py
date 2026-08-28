@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 from conf import BASE_DIR
+from utils.tag_strategy import PLATFORM_TAG_PROFILES, refine_tags
 from uploader.baijiahao_uploader.main import (
     BaiJiaHaoVideo,
     baijiahao_setup,
@@ -797,6 +798,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     platform_parsers = parser.add_subparsers(dest="platform", required=True)
 
+    tags_parser = platform_parsers.add_parser("tags", help="Build a balanced platform-specific tag list")
+    tags_parser.add_argument("--platform", dest="tag_platform", required=True, choices=PLATFORM_TAG_PROFILES)
+    tags_parser.add_argument("--exact", default="", help="Artist, title, product, or other exact-match tags")
+    tags_parser.add_argument("--category", default="", help="Content format, genre, or category tags")
+    tags_parser.add_argument("--identity", default="", help="Creator identity, audience, or scene tags")
+    tags_parser.add_argument("--broad", default="", help="Broad discovery candidates; use sparingly")
+    tags_parser.add_argument("--limit", type=int, help="Override the recommended tag count (1-30)")
+
     douyin_parser = platform_parsers.add_parser("douyin", help="Douyin operations")
     douyin_actions = douyin_parser.add_subparsers(dest="action", required=True)
 
@@ -1037,6 +1046,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 async def dispatch(args: argparse.Namespace) -> int:
+    if args.platform == "tags":
+        tags = refine_tags(
+            args.tag_platform,
+            exact=parse_tags(args.exact),
+            category=parse_tags(args.category),
+            identity=parse_tags(args.identity),
+            broad=parse_tags(args.broad),
+            limit=args.limit,
+        )
+        print(",".join(tags))
+        return 0
+
     if args.platform == "douyin":
         if args.action == "login":
             result = await login_douyin_account(args.account, headless=args.headless)
@@ -1069,7 +1090,7 @@ async def dispatch(args: argparse.Namespace) -> int:
                 publish_strategy=publish_strategy,
                 debug=args.debug,
                 headless=args.headless,
-                collection_name=args.collection,
+                collection_name=getattr(args, "collection", None),
             )
             await upload_video(request)
             print(f"Douyin video upload submitted: {request.video_file}")
@@ -1078,8 +1099,9 @@ async def dispatch(args: argparse.Namespace) -> int:
         if args.action == "upload-note":
             # 如果指定了 --notef，读取文件内容作为 note
             note_content = args.note
-            if args.notef:
-                note_file = Path(args.notef)
+            note_file_arg = getattr(args, "notef", "")
+            if note_file_arg:
+                note_file = Path(note_file_arg)
                 if not note_file.exists():
                     print(f"错误：文件不存在: {note_file}", file=sys.stderr)
                     return 1
@@ -1095,7 +1117,7 @@ async def dispatch(args: argparse.Namespace) -> int:
                 publish_strategy=publish_strategy,
                 debug=args.debug,
                 headless=args.headless,
-                bgm=args.bgm or "",
+                bgm=getattr(args, "bgm", "") or "",
             )
             await upload_note(request)
             print(f"Douyin note upload submitted: {len(request.image_files)} images")
@@ -1130,7 +1152,7 @@ async def dispatch(args: argparse.Namespace) -> int:
                 publish_strategy=publish_strategy,
                 debug=args.debug,
                 headless=args.headless,
-                collection_name=args.collection,
+                collection_name=getattr(args, "collection", None),
             )
             await upload_kuaishou_video(request)
             print(f"Kuaishou video upload submitted: {request.video_file}")
@@ -1276,7 +1298,7 @@ async def dispatch(args: argparse.Namespace) -> int:
                 publish_strategy=publish_strategy,
                 debug=args.debug,
                 headless=args.headless,
-                collection_name=args.collection,
+                collection_name=getattr(args, "collection", None),
             )
             await upload_tencent_video(request)
             print(f"Tencent/WeChat Channels video upload submitted: {request.video_file}")
